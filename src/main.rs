@@ -1,11 +1,10 @@
 use std::fs;
-use std::env;
 use std::io::Write;
 use reqwest;
 use serde_json::{Value};
-use dotenv::dotenv;
 use rpassword::read_password;
 use serde::Serialize;
+use clap::Parser;
 
 #[derive(Debug, Serialize)]
 struct Message {
@@ -28,56 +27,54 @@ struct ChatRequest {
     max_tokens: i32,
 }
 
+#[derive(Parser)]
+#[command(name = "ai")]
+#[command(about = "A command line tool for interacting with Azure OpenAI services")]
+#[command(after_help = "\
+CREDENTIALS:
+    The tool securely stores the following credentials:
+    - Azure OpenAI API Key
+    - Azure OpenAI Endpoint
+    - Azure OpenAI Deployment Name
+
+    On first launch, you will be prompted to enter these credentials.
+    They will be stored securely in the system keyring for future use.
+    Use --delete-keys to remove stored credentials.")]
+struct Cli {
+    /// Input to process - either a file path or direct text
+    #[arg(index = 1)]
+    input: Option<String>,
+
+    /// System prompt from file or direct text
+    #[arg(long, value_name = "PROMPT")]
+    prompt: Option<String>,
+
+    /// Delete all stored credentials
+    #[arg(long)]
+    delete_keys: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load environment variables
-    dotenv().ok();
-    
-    // Get command line args (only collect once)
-    let args: Vec<String> = env::args().collect();
-    
-    // Check for --help parameter
-    if args.len() == 2 && (args[1] == "--help" || args[1] == "-h") {
-        let program_name = std::path::Path::new(&args[0])
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&args[0]);
-        print_help(program_name);
-        return Ok(());
-    }
-    
-    // Check for --delete-keys parameter
-    if args.len() == 2 && args[1] == "--delete-keys" {
+    let cli = Cli::parse();
+
+    if cli.delete_keys {
         delete_credentials()?;
         println!("All credentials deleted from secure storage.");
         return Ok(());
     }
-    
-    // Get just the program name from the path
-    let program_name = std::path::Path::new(&args[0])
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(&args[0]);
 
-    // Check for correct usage
-    if args.len() != 2 && args.len() != 4 {
-        eprintln!("Usage: {} [--prompt <prompt_file_or_text>] <input_file_or_text>", program_name);
-        eprintln!("       {} --delete-keys    # to delete stored credentials", program_name);
-        eprintln!("       {} --help           # show detailed help", program_name);
-        std::process::exit(1);
-    }
+    let input = match cli.input {
+        Some(input_arg) => fs::read_to_string(&input_arg).unwrap_or_else(|_| input_arg),
+        None => {
+            let _ = Cli::parse_from(&["ai", "--help"]);
+            std::process::exit(1);
+        }
+    };
 
-    // Get system prompt and input based on args
-    let (system_prompt, input) = if args.len() == 4 && args[1] == "--prompt" {
-        // Try prompt as file first, if that fails treat as direct text
-        let prompt = fs::read_to_string(&args[2]).unwrap_or_else(|_| args[2].to_string());
-        // Try input as file first, if that fails treat as direct text
-        let input = fs::read_to_string(&args[3]).unwrap_or_else(|_| args[3].to_string());
-        (prompt, input)
-    } else {
-        // Default prompt and try input as file or direct text
-        let input = fs::read_to_string(&args[1]).unwrap_or_else(|_| args[1].to_string());
-        (String::from("You are an AI assistant that helps people find information."), input)
+    let system_prompt = match cli.prompt {
+        Some(prompt_arg) => fs::read_to_string(&prompt_arg).unwrap_or_else(|_| prompt_arg),
+        None => String::from("You are an AI assistant that helps people find information.")
     };
 
     // Read from a secure credential store
@@ -221,34 +218,4 @@ fn print_error_response(response_json: &Value, input: &str) -> Result<(), Box<dy
     println!("\nRaw API Response:\n");
     println!("{}", serde_json::to_string_pretty(response_json)?);
     Ok(())
-}
-
-fn print_help(program: &str) {
-    println!("AI Command Line Tool\n");
-    println!("USAGE:");
-    println!("    {} [--prompt <prompt_file_or_text>] <input_file_or_text>", program);
-    println!("    {} --delete-keys", program);
-    println!("    {} --help\n", program);
-    
-    println!("DESCRIPTION:");
-    println!("    A command line tool for interacting with Azure OpenAI services.\n");
-    
-    println!("OPTIONS:");
-    println!("    --prompt <prompt_file_or_text>  Specify system prompt from file or direct text");
-    println!("                                    If not provided, defaults to general assistance");
-    println!("    --delete-keys                   Delete all stored credentials");
-    println!("    --help, -h                      Display this help message\n");
-    
-    println!("ARGUMENTS:");
-    println!("    <input_file_or_text>            Input to process - either a file path or direct text\n");
-    
-    println!("CREDENTIALS:");
-    println!("    The tool securely stores the following credentials:");
-    println!("    - Azure OpenAI API Key");
-    println!("    - Azure OpenAI Endpoint");
-    println!("    - Azure OpenAI Deployment Name\n");
-    
-    println!("    On first launch, you will be prompted to enter these credentials.");
-    println!("    They will be stored securely in the system keyring for future use.");
-    println!("    Use --delete-keys to remove stored credentials.\n");
 }
